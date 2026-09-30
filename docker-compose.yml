@@ -1,0 +1,85 @@
+# Production-like stack.
+#
+#   docker compose up --build
+#
+# Startup sequence:
+#   postgres -> healthy
+#   redis    -> healthy
+#   migrate  -> runs SQLx migrations, exits 0
+#   app      -> starts only after all of the above succeeded
+name: rstarter
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-app}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-app}"
+      POSTGRES_DB: "${POSTGRES_DB:-app}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  # One-shot migration service: waits for PostgreSQL, applies pending SQLx
+  # migrations, and exits. A non-zero exit (migration failure) keeps the
+  # `app` service from starting.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    image: rstarter-migrate:latest
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}"
+    volumes:
+      - ./migrations:/migrations:ro
+    working_dir: /
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rstarter:latest
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "8080"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}"
+      REDIS_URL: "redis://redis:6379"
+      RUST_LOG: "${RUST_LOG:-info}"
+      LOG_FORMAT: "${LOG_FORMAT:-pretty}"
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-}"
+      CACHE_TTL_SECS: "${CACHE_TTL_SECS:-300}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

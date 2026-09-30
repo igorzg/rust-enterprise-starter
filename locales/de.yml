@@ -1,0 +1,14 @@
+_version: 1
+validation:
+  name_length: "Name muss 1 bis %{max} Zeichen lang sein"
+  email_length: "E-Mail muss 1 bis %{max} Zeichen lang sein"
+  email_at_sign: "E-Mail muss genau ein '@' enthalten"
+  email_local_domain: "E-Mail muss einen nicht-leeren lokalen Teil und eine Domäne mit einem '.' haben"
+  email_domain_dots: "Die E-Mail-Domäne darf nicht mit '.' beginnen oder enden und darf '..' nicht enthalten"
+  invalid_body: "ungültiger Anfragetext"
+  invalid_id: "ID muss eine gültige UUID sein"
+errors:
+  email_already_exists: "Ein Benutzer mit der E-Mail %{email} existiert bereits"
+  user_not_found: "Benutzer mit ID %{id} wurde nicht gefunden"
+  route_not_found: "Die angeforderte Ressource existiert nicht"
+  internal_error: "Ein interner Fehler ist aufgetreten"

@@ -1,0 +1,14 @@
+_version: 1
+validation:
+  name_length: "name must be 1 to %{max} characters"
+  email_length: "email must be 1 to %{max} characters"
+  email_at_sign: "email must contain exactly one '@'"
+  email_local_domain: "email must have a non-empty local part and a domain containing a '.'"
+  email_domain_dots: "email domain must not start or end with a '.' and must not contain '..'"
+  invalid_body: "invalid request body"
+  invalid_id: "id must be a valid UUID"
+errors:
+  email_already_exists: "a user with email %{email} already exists"
+  user_not_found: "user with id %{id} was not found"
+  route_not_found: "the requested resource does not exist"
+  internal_error: "an internal error occurred"

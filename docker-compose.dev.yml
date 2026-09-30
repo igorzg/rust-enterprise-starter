@@ -1,0 +1,64 @@
+# Local development stack (complete, standalone).
+#
+#   docker compose -f docker-compose.dev.yml up --build
+#
+# Differences vs the production-like stack (docker-compose.yml):
+#   - no app service — run the app natively (make run) against the
+#     published PostgreSQL/Redis ports
+#   - PostgreSQL and Redis ports are published on the host so local tools
+#     (psql, redis-cli, sqlx CLI) can reach them directly
+#   - no container restart policies
+name: rstarter-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-app}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-app}"
+      POSTGRES_DB: "${POSTGRES_DB:-app}"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  # One-shot migration service: runs pending SQLx migrations automatically
+  # on every `up`, then exits.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    image: rstarter-migrate:latest
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}"
+    volumes:
+      - ./migrations:/migrations:ro
+    working_dir: /
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres_data:
+  redis_data:
