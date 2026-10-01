@@ -60,7 +60,7 @@ No `.env` is required — the Compose file supplies defaults and points `DATABAS
 ### Run natively (development)
 
 ```bash
-cp .env.bak .env        # DATABASE_URL / REDIS_URL point at localhost (the defaults already do)
+cp .env.example .env    # DATABASE_URL / REDIS_URL point at localhost (the defaults already do)
 make up-dev             # start PostgreSQL + Redis + migrate (infrastructure only)
 make run                # run the app natively, loading .env  (or `make run-dev` for watch)
 ```
@@ -94,7 +94,7 @@ See [Development](#development) and [Configuration](#configuration) for details.
 ├── Makefile                  # cargo, docker, migration, and smoke targets
 ├── docker-compose.yml          # production-like stack (app + PostgreSQL + Redis + migrate)
 ├── docker-compose.dev.yml      # dev infrastructure: PostgreSQL + Redis + migrate (app runs natively)
-├── .env.bak
+├── .env.example
 ├── migrations/
 │   ├── 0001_create_users.sql   # applied by the `migrate` service only
 │   └── 0002_create_groups.sql  # groups + user_groups join table
@@ -110,7 +110,10 @@ See [Development](#development) and [Configuration](#configuration) for details.
 │   │   ├── domain/
 │   │   │   ├── user.rs         # User domain model + CreateUserCommand
 │   │   │   └── group.rs        # Group domain model + CreateGroupCommand
-│   │   ├── ports.rs              # UserRepository, UserCache, GroupRepository, GroupCache, HealthCheck
+│   │   ├── ports/
+│   │   │   ├── user.rs           # UserRepository, UserCache
+│   │   │   ├── group.rs          # GroupRepository, GroupCache
+│   │   │   └── health.rs         # HealthCheck, HealthStatus, ComponentStatus
 │   │   ├── errors.rs             # AppError + error enums
 │   │   ├── user_service.rs
 │   │   └── group_service.rs
@@ -156,7 +159,7 @@ All common operations are Makefile targets; `make help` lists them with descript
 
 ## Configuration
 
-All configuration comes from environment variables (see `.env.bak`). The app **fails fast** at startup when required variables are missing or invalid.
+All configuration comes from environment variables (see `.env.example`). The app **fails fast** at startup when required variables are missing or invalid.
 
 | Variable               | Required | Default     | Description                                          |
 |------------------------|----------|-------------|------------------------------------------------------|
@@ -180,7 +183,7 @@ Inside Docker, `DATABASE_URL` and `REDIS_URL` point at the **service names** (`p
 
 ```bash
 # 1. Configure local environment
-cp .env.bak .env
+cp .env.example .env
 
 # 2. Start the dev infrastructure stack (PostgreSQL + Redis + migrate)
 make up-dev
@@ -397,7 +400,7 @@ metrics::gauge!("queue_depth").set(42.0);
 **Add a domain metric.** The core must not import `metrics` or Prometheus, so expose a port (like `UserRepository` / `UserCache`) and implement it in an adapter:
 
 ```rust
-// services/ports.rs — a core-owned port in core vocabulary.
+// services/ports/user.rs — a core-owned port in core vocabulary.
 pub trait Metrics {
     fn user_deleted(&self);
 }
@@ -541,7 +544,7 @@ Model separation — each layer owns its types; mapping happens only at the laye
 Key rules:
 
 - **The core is standalone.** `services/` never imports from `api/` or `persistence/` — no adapter types, no infrastructure crates. Both adapters depend only on the core, never on each other.
-- **The ports are owned by the core.** `UserRepository`, `UserCache`, `GroupRepository`, `GroupCache`, and `HealthCheck` are defined in `services/ports.rs` in the core's vocabulary (the domain model, the core error types); the persistence adapters implement them and map entity ↔ domain internally.
+- **The ports are owned by the core.** `UserRepository`, `UserCache`, `GroupRepository`, `GroupCache`, and `HealthCheck` are defined in `services/ports/` (grouped by domain: `user`, `group`, `health`) in the core's vocabulary (the domain model, the core error types); the persistence adapters implement them and map entity ↔ domain internally.
 - **Handlers contain no SQL and no business logic.** They decode requests, call a service, and encode responses.
 - **Services never know the cache is Redis or the DB is PostgreSQL.** They only see the `UserCache`, `UserRepository`, `GroupCache`, and `GroupRepository` traits. Redis/SQLx types never leave `persistence/`.
 - **Request validation lives in the API layer.** Format, length, and normalization checks run when a request is mapped to its command (`CreateUserRequest::to_command`); services apply business rules only (e.g. email uniqueness).
