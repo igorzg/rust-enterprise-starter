@@ -8,5 +8,5 @@
 pub mod requests;
 pub mod responses;
 
-pub use requests::CreateUserRequest;
-pub use responses::UserResponse;
+pub use requests::{AssignGroupMemberRequest, CreateGroupRequest, CreateUserRequest};
+pub use responses::{GroupDetailResponse, GroupResponse, UserResponse};

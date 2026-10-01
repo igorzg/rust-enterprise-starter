@@ -42,6 +42,9 @@ pub enum ValidationError {
 
     #[error("email domain has invalid dots")]
     EmailDomainDots,
+
+    #[error("group name length out of range (max {max})")]
+    GroupNameLength { max: usize },
 }
 
 /// Locale-agnostic "not found" failure.
@@ -49,6 +52,12 @@ pub enum ValidationError {
 pub enum NotFoundError {
     #[error("user with id {id} was not found")]
     User { id: Uuid },
+
+    #[error("group with id {id} was not found")]
+    Group { id: Uuid },
+
+    #[error("user {user_id} is not a member of group {group_id}")]
+    GroupMembership { group_id: Uuid, user_id: Uuid },
 }
 
 /// Locale-agnostic conflict failure.
@@ -56,6 +65,9 @@ pub enum NotFoundError {
 pub enum ConflictError {
     #[error("a user with email {email} already exists")]
     EmailAlreadyExists { email: String },
+
+    #[error("a group named {name} already exists")]
+    GroupNameAlreadyExists { name: String },
 }
 
 /// Unified application error model, owned by the core. Services raise the

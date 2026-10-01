@@ -12,6 +12,12 @@ pub(super) fn internal_mapping_error(error: sqlx::Error) -> AppError {
     )))
 }
 
+pub(super) fn group_mapping_error(error: sqlx::Error) -> AppError {
+    AppError::Database(DatabaseError::Payload(format!(
+        "unexpected row shape in groups table: {error}"
+    )))
+}
+
 pub(super) fn map_db_error(error: sqlx::Error) -> AppError {
     AppError::Database(DatabaseError::Backend(error.to_string()))
 }

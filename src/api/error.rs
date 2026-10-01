@@ -61,13 +61,32 @@ impl AppError {
             AppError::Validation(ValidationError::EmailDomainDots) => {
                 t!("validation.email_domain_dots", locale = locale).into_owned()
             }
+            AppError::Validation(ValidationError::GroupNameLength { max }) => {
+                t!("validation.group_name_length", locale = locale, max = *max).into_owned()
+            }
             AppError::NotFound(NotFoundError::User { id }) => {
                 t!("errors.user_not_found", locale = locale, id = *id).into_owned()
             }
+            AppError::NotFound(NotFoundError::Group { id }) => {
+                t!("errors.group_not_found", locale = locale, id = *id).into_owned()
+            }
+            AppError::NotFound(NotFoundError::GroupMembership { group_id, user_id }) => t!(
+                "errors.group_membership_not_found",
+                locale = locale,
+                group_id = *group_id,
+                user_id = *user_id
+            )
+            .into_owned(),
             AppError::Conflict(ConflictError::EmailAlreadyExists { email }) => t!(
                 "errors.email_already_exists",
                 locale = locale,
                 email = email.as_str()
+            )
+            .into_owned(),
+            AppError::Conflict(ConflictError::GroupNameAlreadyExists { name }) => t!(
+                "errors.group_name_already_exists",
+                locale = locale,
+                name = name.as_str()
             )
             .into_owned(),
             AppError::Database(_) | AppError::Cache(_) => {

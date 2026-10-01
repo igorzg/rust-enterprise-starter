@@ -12,7 +12,7 @@ PostgreSQL persistence, Redis cache-aside, OpenAPI/Swagger documentation, Docker
 - [Commands](#commands)
 - [Configuration](#configuration)
 - [Development](#development)
-- [Production Deployment](#production-deployment)
+- [Docker Deployment](#docker-deployment)
 - [Migrations](#migrations)
 - [API](#api)
 - [Swagger / OpenAPI](#swagger--openapi)
@@ -31,6 +31,7 @@ A structured backend that can be deployed to production.
 It provides:
 
 - A **User domain** with `POST /api/v1/users`, `GET /api/v1/users/{id}`, and `DELETE /api/v1/users/{id}`
+- A **Group domain** (many-to-many membership with users): group CRUD at `/api/v1/groups`, members on `GET /api/v1/groups/{id}`, assignment via `POST`/`DELETE /api/v1/groups/{id}/users[/{userId}]`, and `GET /api/v1/users/{id}/groups`
 - **Cache-aside reads** (Redis first, PostgreSQL on miss, TTL-based) with cache invalidation on delete
 - **Dedicated migration service** (SQLx CLI) that runs before the app starts — the app never runs migrations
 - **Structured logging** (pretty or JSON), health/readiness probes, CORS, body limits, gzip, graceful shutdown
@@ -95,7 +96,8 @@ See [Development](#development) and [Configuration](#configuration) for details.
 ├── docker-compose.dev.yml      # dev infrastructure: PostgreSQL + Redis + migrate (app runs natively)
 ├── .env.bak
 ├── migrations/
-│   └── 0001_create_users.sql   # applied by the `migrate` service only
+│   ├── 0001_create_users.sql   # applied by the `migrate` service only
+│   └── 0002_create_groups.sql  # groups + user_groups join table
 ├── locales/
 │   ├── en.yml                  # English (fallback) error messages
 │   └── de.yml                  # German example
@@ -106,19 +108,23 @@ See [Development](#development) and [Configuration](#configuration) for details.
 │   ├── state.rs                # composition root
 │   ├── services/
 │   │   ├── domain/
-│   │   │   └── user.rs         # User domain model + CreateUserCommand
-│   │   ├── ports.rs              # UserRepository, UserCache, HealthCheck
+│   │   │   ├── user.rs         # User domain model + CreateUserCommand
+│   │   │   └── group.rs        # Group domain model + CreateGroupCommand
+│   │   ├── ports.rs              # UserRepository, UserCache, GroupRepository, GroupCache, HealthCheck
 │   │   ├── errors.rs             # AppError + error enums
-│   │   └── user_service.rs
+│   │   ├── user_service.rs
+│   │   └── group_service.rs
 │   ├── persistence/
 │   │   ├── database/
 │   │   │   ├── domain/
-│   │   │   │   └── user.rs     # User entity (adapter-internal)
-│   │   │   └── postgres/       # helpers + PostgresUserRepository
+│   │   │   │   ├── user.rs     # User entity (adapter-internal)
+│   │   │   │   └── group.rs    # Group entity (adapter-internal)
+│   │   │   └── postgres/       # helpers + PostgresUserRepository + PostgresGroupRepository
 │   │   ├── cache/
 │   │   │   ├── domain/
-│   │   │   │   └── user.rs     # CachedUser (cache serialization shape)
-│   │   │   └── redis/          # RedisUserCache
+│   │   │   │   ├── user.rs     # CachedUser (cache serialization shape)
+│   │   │   │   └── group.rs    # CachedGroup (cache serialization shape)
+│   │   │   └── redis/          # RedisUserCache + RedisGroupCache
 │   │   └── health.rs           # SystemHealthCheck (PG + Redis probes)
 │   └── api/
 │       ├── routes.rs           # router, CORS, limits, compression, metrics, 404
@@ -127,11 +133,13 @@ See [Development](#development) and [Configuration](#configuration) for details.
 │       ├── metrics.rs          # Prometheus recorder, /metrics, RED middleware
 │       ├── openapi.rs          # ApiDoc (utoipa)
 │       ├── dto/                # request/response types (requests/ + responses/)
-│       └── handlers/           # user_handler, health
+│       └── handlers/           # user_handler, group_handler, health
 └── tests/
     ├── common/mod.rs           # in-memory fakes with counters
     ├── user_service.rs         # service tests (business rules, cache-aside)
+    ├── group_service.rs        # group service tests (membership, cache-aside)
     ├── users_api.rs            # full-router API tests
+    ├── groups_api.rs           # full-router API tests for the group endpoints
     ├── config.rs               # env parsing (CORS origin validation)
     ├── error_logging.rs        # 5xx log chain + sanitized envelope
     ├── i18n.rs                 # locale resolution + localization tests
@@ -206,7 +214,7 @@ The dev stack is fully reset with:
 make reset-dev     # removes the postgres_data/redis_data volumes
 ```
 
-## Production Deployment
+## Docker Deployment
 
 ```bash
 make up            # = docker compose up --build -d
@@ -247,7 +255,7 @@ If any migration fails, `migrate` exits non-zero and the app **never starts**. T
 - **Location:** `migrations/000N_verb_noun.sql` (e.g. `0001_create_users.sql`)
 - **Owner:** the dedicated one-shot `migrate` service (SQLx CLI image), present in **both** `docker-compose.yml` and `docker-compose.dev.yml`. The application binary does **not** run migrations at startup and does **not** embed them.
 - **Immutability:** never edit an applied migration. Add a new numbered file instead. SQLx records applied migrations in the `_sqlx_migrations` history table.
-- **Column bookkeeping:** `users.updated_at` is maintained by the `users_set_updated_at` trigger (defined in `0001_create_users.sql`) — application code never sets it.
+- **Column bookkeeping:** `users.updated_at` and `groups.updated_at` are maintained by the `users_set_updated_at` / `groups_set_updated_at` triggers (defined in `0001_create_users.sql` / `0002_create_groups.sql`, reusing the shared `set_updated_at()` trigger function) — application code never sets them.
 - **Applying manually:** `make migrate` / `make migrate-dev`, or `docker compose -f <file> run --rm migrate`, or the SQLx CLI directly against a local PostgreSQL.
 - **Failure behavior:** a failing migration makes the `migrate` service exit non-zero, which blocks the app from starting (`service_completed_successfully`).
 - **Production strategy:** in a multi-replica deployment, run migrations as a dedicated step (a job/step in CI-CD, or a single `migrate` container) **before** rolling out new app replicas — never inside app containers.
@@ -256,11 +264,18 @@ If any migration fails, `migrate` exits non-zero and the app **never starts**. T
 
 Base path: `/api/v1`
 
-| Method   | Path             | Description                        | Success | Errors          |
-|----------|------------------|------------------------------------|---------|-----------------|
-| `POST`   | `/api/v1/users`  | Create a user                      | 201     | 400, 409, 500   |
-| `GET`    | `/api/v1/users/{id}` | Fetch a user (cache-aside)    | 200     | 400, 404, 500   |
-| `DELETE` | `/api/v1/users/{id}` | Delete a user (+ cache invalidation) | 204 | 400, 404, 500   |
+| Method   | Path                          | Description                                    | Success | Errors          |
+|----------|-------------------------------|------------------------------------------------|---------|-----------------|
+| `POST`   | `/api/v1/users`               | Create a user                                  | 201     | 400, 409, 500   |
+| `GET`    | `/api/v1/users/{id}`          | Fetch a user (cache-aside)                     | 200     | 400, 404, 500   |
+| `DELETE` | `/api/v1/users/{id}`          | Delete a user (+ cache invalidation)           | 204     | 400, 404, 500   |
+| `GET`    | `/api/v1/users/{id}/groups`   | List the groups a user belongs to              | 200     | 400, 404, 500   |
+| `POST`   | `/api/v1/groups`              | Create a group (unique name)                   | 201     | 400, 409, 500   |
+| `GET`    | `/api/v1/groups`              | List all groups                                | 200     | 500             |
+| `GET`    | `/api/v1/groups/{id}`         | Fetch a group with its members (cache-aside)   | 200     | 400, 404, 500   |
+| `DELETE` | `/api/v1/groups/{id}`         | Delete a group (memberships cascade, cache invalidated) | 204 | 400, 404, 500 |
+| `POST`   | `/api/v1/groups/{id}/users`   | Assign a user to a group (idempotent)          | 204     | 400, 404, 500   |
+| `DELETE` | `/api/v1/groups/{id}/users/{userId}` | Remove a user from a group            | 204     | 400, 404, 500   |
 
 ### Examples
 
@@ -291,7 +306,7 @@ All errors share the same JSON shape. `5xx` responses never leak internal detail
 {"error": {"code": "NOT_FOUND", "message": "user with id 550e8400-e29b-41d4-a716-446655440000 was not found"}}
 ```
 
-Codes: `VALIDATION_ERROR` (400), `NOT_FOUND` (404), `CONFLICT` (409, duplicate email), `DATABASE_ERROR` / `CACHE_ERROR` (500).
+Codes: `VALIDATION_ERROR` (400), `NOT_FOUND` (404), `CONFLICT` (409, duplicate email or group name), `DATABASE_ERROR` / `CACHE_ERROR` (500).
 
 ## Swagger / OpenAPI
 
@@ -306,10 +321,12 @@ Both are generated from the code via utoipa (sourced from the handler attributes
 make test        # = cargo test
 ```
 
-The test suite is **hermetic**: it runs against in-memory fakes of `UserRepository`, `UserCache`, and `HealthCheck` (with hit/miss counters), so `cargo test` needs **no local PostgreSQL or Redis**.
+The test suite is **hermetic**: it runs against in-memory fakes of `UserRepository`, `UserCache`, `GroupRepository`, `GroupCache`, and `HealthCheck` (with hit/miss counters), so `cargo test` needs **no local PostgreSQL or Redis**.
 
 - `tests/user_service.rs` — business rules (uniqueness conflicts), cache-aside (first GET reads the DB exactly once and fills the cache; second GET is a cache hit), invalidation on delete.
+- `tests/group_service.rs` — group business rules: name-uniqueness conflicts, cache-aside, invalidation on delete, membership add/remove (existence checks, idempotent assignment, 404 on removing a non-membership).
 - `tests/users_api.rs` — the full Axum router: request validation (email format, blank names, case/whitespace normalization), health/ready, create/get/delete flows, error envelopes (including sanitized 500s), non-UUID ids, unknown routes.
+- `tests/groups_api.rs` — the full Axum router for the seven group endpoints: name validation (blank/overlong), duplicate-name 409, group detail with members, idempotent assignment, 404s for unknown group/user/membership, per-user group listing, sanitized 500s.
 - `tests/config.rs` — environment parsing: `CORS_ALLOWED_ORIGINS` accepts lists and `*`, rejects invalid entries at startup.
 - `tests/error_logging.rs` — a database failure logs the full error source chain (root cause included) while the HTTP envelope stays sanitized.
 - `tests/integration.rs` — the real PostgreSQL and Redis adapters: concurrent inserts of the same email (the `ON CONFLICT` race) and the create→read→delete round trip with a TTL check. **Skipped automatically** when `DATABASE_URL` / `REDIS_URL` are unset, so local `cargo test` stays hermetic; CI provides both services and applies the migrations first.
@@ -471,14 +488,15 @@ flowchart TB
     subgraph CORE["services/ — the core (the hexagon)"]
         direction TB
         U["UserService — business rules only<br/>(email uniqueness), cache-aside reads"]
-        M["Domain model: User<br/>Command: CreateUserCommand<br/>Errors: AppError, CacheError, DatabaseError"]
-        P["Output ports (traits owned by the core):<br/>UserRepository · UserCache · HealthCheck"]
+        G["GroupService — group CRUD + membership<br/>(name uniqueness), cache-aside reads"]
+        M["Domain model: User, Group<br/>Commands: CreateUserCommand, CreateGroupCommand<br/>Errors: AppError, CacheError, DatabaseError"]
+        P["Output ports (traits owned by the core):<br/>UserRepository · UserCache · GroupRepository · GroupCache · HealthCheck"]
     end
 
     subgraph PERS["persistence/ — output adapters"]
         direction TB
-        PG["PostgresUserRepository (SQLx)<br/>User entity ↔ domain mapping at this edge"]
-        RD["RedisUserCache (JSON values, TTL)"]
+        PG["PostgresUserRepository + PostgresGroupRepository (SQLx)<br/>Entity ↔ domain mapping at this edge"]
+        RD["RedisUserCache + RedisGroupCache (JSON values, TTL)"]
         HC["SystemHealthCheck (PG + Redis probes)"]
     end
 
@@ -490,9 +508,13 @@ flowchart TB
     Client -->|"REST /api/v1 (JSON)"| R
     Z -->|"200/201/204 · 4xx/5xx JSON envelope"| Client
     D -->|"CreateUserCommand"| U
+    D -->|"CreateGroupCommand"| G
     U -->|"User"| Z
+    G -->|"Group"| Z
     U --- M
+    G --- M
     U -.->|"calls"| P
+    G -.->|"calls"| P
     P -.->|"expressed in"| M
     PG -- "implements" --> P
     RD -- "implements" --> P
@@ -502,6 +524,7 @@ flowchart TB
     HC -.-> PGD
     HC -.-> RDS
     COMPOSE -.->|"wires"| U
+    COMPOSE -.->|"wires"| G
     COMPOSE -.->|"wires"| PG
     COMPOSE -.->|"wires"| RD
     COMPOSE -.->|"wires"| HC
@@ -518,9 +541,9 @@ Model separation — each layer owns its types; mapping happens only at the laye
 Key rules:
 
 - **The core is standalone.** `services/` never imports from `api/` or `persistence/` — no adapter types, no infrastructure crates. Both adapters depend only on the core, never on each other.
-- **The ports are owned by the core.** `UserRepository`, `UserCache`, and `HealthCheck` are defined in `services/ports.rs` in the core's vocabulary (the domain model, the core error types); the persistence adapters implement them and map entity ↔ domain internally.
+- **The ports are owned by the core.** `UserRepository`, `UserCache`, `GroupRepository`, `GroupCache`, and `HealthCheck` are defined in `services/ports.rs` in the core's vocabulary (the domain model, the core error types); the persistence adapters implement them and map entity ↔ domain internally.
 - **Handlers contain no SQL and no business logic.** They decode requests, call a service, and encode responses.
-- **Services never know the cache is Redis or the DB is PostgreSQL.** They only see `UserCache` and `UserRepository` traits. Redis/SQLx types never leave `persistence/`.
+- **Services never know the cache is Redis or the DB is PostgreSQL.** They only see the `UserCache`, `UserRepository`, `GroupCache`, and `GroupRepository` traits. Redis/SQLx types never leave `persistence/`.
 - **Request validation lives in the API layer.** Format, length, and normalization checks run when a request is mapped to its command (`CreateUserRequest::to_command`); services apply business rules only (e.g. email uniqueness).
 - **No DI container.** Dependencies are explicit: `Arc<dyn Trait>` fields constructed once in the composition root (`src/state.rs`) and shared via Axum `State`.
 - **Entity purity.** `persistence/database/domain/` and `persistence/cache/domain/` have no Axum, SQLx, Redis, or HTTP imports.

@@ -1,7 +1,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, header::HeaderValue};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
@@ -28,6 +28,26 @@ pub fn build_router(state: AppState, cors_origins: Vec<String>) -> Router {
         .route(
             "/users/{id}",
             get(handlers::user_handler::get_user).delete(handlers::user_handler::delete_user),
+        )
+        .route(
+            "/users/{id}/groups",
+            get(handlers::group_handler::user_groups),
+        )
+        .route(
+            "/groups",
+            get(handlers::group_handler::list_groups).post(handlers::group_handler::create_group),
+        )
+        .route(
+            "/groups/{id}",
+            get(handlers::group_handler::get_group).delete(handlers::group_handler::delete_group),
+        )
+        .route(
+            "/groups/{id}/users",
+            post(handlers::group_handler::add_group_member),
+        )
+        .route(
+            "/groups/{id}/users/{userId}",
+            delete(handlers::group_handler::remove_group_member),
         )
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(CompressionLayer::new())
