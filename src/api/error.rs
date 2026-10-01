@@ -130,15 +130,31 @@ impl IntoResponse for ApiError {
         let locale = i18n::current_locale();
         let message = self.localized_message(&locale);
 
-        // 5xx: log full detail server-side, return a sanitized message.
+        // 5xx: log the full source chain server-side (including the
+        // root cause, e.g. the SQLx error behind AppError::Database),
+        // return a sanitized message.
         // 4xx: the message is already client-safe.
         match status {
             StatusCode::INTERNAL_SERVER_ERROR => {
-                tracing::error!(code = code, detail = %self, "request failed")
+                tracing::error!(code = code, detail = %error_chain(&self), "request failed")
             }
             _ => tracing::warn!(code = code, detail = %self, "request rejected"),
         }
 
         (status, Json(ErrorResponse::new(code, message))).into_response()
     }
+}
+
+/// Join an error and its `source()` chain with `": "` so the root cause
+/// reaches the log: `Display` alone only shows the outermost variant
+/// (e.g. `AppError::Database` renders as "database error" without the
+/// underlying SQLx error).
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut chain: Vec<String> = Vec::new();
+    let mut current: Option<&dyn std::error::Error> = Some(error);
+    while let Some(err) = current {
+        chain.push(err.to_string());
+        current = err.source();
+    }
+    chain.join(": ")
 }

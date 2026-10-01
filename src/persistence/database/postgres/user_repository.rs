@@ -59,7 +59,13 @@ impl UserRepository for PostgresUserRepository {
             })),
         });
 
-        record_db("insert", started, result.is_err());
+        // A duplicate-email conflict is a business outcome (409), not a
+        // database failure — only `AppError::Database` counts.
+        record_db(
+            "insert",
+            started,
+            matches!(&result, Err(AppError::Database(_))),
+        );
         result
     }
 

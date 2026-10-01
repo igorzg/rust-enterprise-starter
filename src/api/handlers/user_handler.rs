@@ -43,6 +43,7 @@ pub async fn create_user(
     ),
     responses(
         (status = 200, description = "User found", body = UserResponse),
+        (status = 400, description = "Invalid id", body = ErrorResponse),
         (status = 404, description = "User not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
@@ -66,6 +67,7 @@ pub async fn get_user(
     ),
     responses(
         (status = 204, description = "User deleted"),
+        (status = 400, description = "Invalid id", body = ErrorResponse),
         (status = 404, description = "User not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),

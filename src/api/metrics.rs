@@ -16,6 +16,11 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 
+/// `path` label for requests matching no route (the JSON 404 fallback).
+/// A constant on purpose: the raw path would be unbounded and let error
+/// probes inflate label cardinality.
+const UNMATCHED_PATH: &str = "<unmatched>";
+
 /// The recorder handle, installed exactly once per process.
 static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 
@@ -44,16 +49,17 @@ pub async fn metrics_handler() -> impl IntoResponse {
     )
 }
 
-/// Axum middleware recording RED metrics. Applied with `route_layer` so
-/// [`MatchedPath`] is available and the route template (not the raw path)
-/// is used as the `path` label — this keeps label cardinality bounded as
-/// ids in the URL change.
+/// Axum middleware recording RED metrics. Applied with `layer` (not
+/// `route_layer`) so the 404 fallback is counted too. The route template
+/// (not the raw path) is used as the `path` label — this keeps label
+/// cardinality bounded as ids in the URL change; requests matching no
+/// route fall back to [`UNMATCHED_PATH`].
 pub async fn track_http_metrics(req: Request, next: Next) -> Response {
     let path = req
         .extensions()
         .get::<MatchedPath>()
         .map(|matched| matched.as_str().to_owned())
-        .unwrap_or_else(|| req.uri().path().to_owned());
+        .unwrap_or_else(|| UNMATCHED_PATH.to_owned());
 
     // The scrape itself is not application traffic; do not count it.
     if path == "/metrics" {

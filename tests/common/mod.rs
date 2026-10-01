@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use rstarter::services::domain::User;
-use rstarter::services::errors::{AppError, CacheError, ConflictError};
+use rstarter::services::errors::{AppError, CacheError, ConflictError, DatabaseError};
 use rstarter::services::ports::{
     ComponentStatus, HealthCheck, HealthStatus, UserCache, UserRepository,
 };
@@ -158,4 +158,48 @@ pub fn test_state(
         health: Arc::new(InMemoryHealthCheck { ready: healthy }),
     };
     (state, repository, cache)
+}
+
+/// A repository whose every operation fails — for 5xx error tests.
+pub struct FailingUserRepository;
+
+impl FailingUserRepository {
+    fn failure() -> AppError {
+        AppError::Database(DatabaseError::Backend(
+            "simulated database failure: on fire".to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl UserRepository for FailingUserRepository {
+    async fn insert(&self, _name: &str, _email: &str) -> Result<User, AppError> {
+        Err(Self::failure())
+    }
+
+    async fn find_by_id(&self, _id: Uuid) -> Result<Option<User>, AppError> {
+        Err(Self::failure())
+    }
+
+    async fn find_by_email(&self, _email: &str) -> Result<Option<User>, AppError> {
+        Err(Self::failure())
+    }
+
+    async fn delete(&self, _id: Uuid) -> Result<bool, AppError> {
+        Err(Self::failure())
+    }
+}
+
+/// Build an [`AppState`] whose repository fails every operation — for
+/// 5xx error-envelope and log tests.
+pub fn failing_state() -> AppState {
+    rstarter::api::metrics::init();
+
+    AppState {
+        user_service: Arc::new(UserService::new(
+            Arc::new(FailingUserRepository),
+            Arc::new(InMemoryUserCache::default()),
+        )),
+        health: Arc::new(InMemoryHealthCheck { ready: true }),
+    }
 }

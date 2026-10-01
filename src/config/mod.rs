@@ -54,12 +54,7 @@ impl Config {
                 .parse::<u64>()
                 .context("CACHE_TTL_SECS must be a non-negative integer")?,
         );
-        let cors_allowed_origins = env_or("CORS_ALLOWED_ORIGINS", "")
-            .split(',')
-            .map(str::trim)
-            .filter(|origin| !origin.is_empty())
-            .map(str::to_string)
-            .collect();
+        let cors_allowed_origins = parse_cors_origins(&env_or("CORS_ALLOWED_ORIGINS", ""))?;
 
         Ok(Self {
             bind_addr,
@@ -69,6 +64,45 @@ impl Config {
             cache_ttl,
             log_format,
         })
+    }
+}
+
+/// Parse and validate `CORS_ALLOWED_ORIGINS`: comma-separated, empty
+/// entries ignored, each entry must be an origin a browser can actually
+/// send (`*` or an absolute `http(s)://` URI with an authority).
+/// Invalid entries fail startup instead of being silently dropped.
+pub fn parse_cors_origins(raw: &str) -> Result<Vec<String>> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .map(|origin| -> Result<String> {
+            validate_origin(origin).with_context(|| {
+                format!("CORS_ALLOWED_ORIGINS entry is not a valid origin: {origin}")
+            })?;
+            Ok(origin.to_string())
+        })
+        .collect()
+}
+
+/// An origin is `*` (any origin) or an absolute `http(s)://` URI with an
+/// authority and no path/query — anything else can never match a request
+/// `Origin` header, so it is a misconfiguration.
+fn validate_origin(origin: &str) -> Result<()> {
+    if origin == "*" {
+        return Ok(());
+    }
+    let uri = axum::http::Uri::from_str(origin)?;
+    let scheme = uri.scheme_str().map(|scheme| scheme.to_ascii_lowercase());
+    // An origin has no path; the http crate represents the (required)
+    // empty path as `/`.
+    let no_path = matches!(
+        uri.path_and_query().map(|path| path.as_str()),
+        None | Some("/")
+    );
+    if matches!(scheme.as_deref(), Some("http" | "https")) && uri.authority().is_some() && no_path {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("not an absolute http(s) origin"))
     }
 }
 

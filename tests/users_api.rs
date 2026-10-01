@@ -295,6 +295,30 @@ async fn unknown_route_returns_404_json_envelope() {
 }
 
 #[tokio::test]
+async fn database_error_returns_sanitized_500_envelope() {
+    let router = build_router(common::failing_state(), Vec::new());
+
+    let response = router
+        .oneshot(get(&format!("/api/v1/users/{UNKNOWN_ID}")))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(value["error"]["code"], "DATABASE_ERROR");
+    assert_eq!(value["error"]["message"], "an internal error occurred");
+
+    // The internal detail never leaks into the response body.
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        !text.contains("on fire"),
+        "5xx body must stay sanitized: {text}"
+    );
+}
+
+#[tokio::test]
 async fn metrics_endpoint_exposes_prometheus_text_with_normalized_paths() {
     let (state, _, _) = test_state(true);
     let router = build_router(state, Vec::new());
@@ -303,6 +327,13 @@ async fn metrics_endpoint_exposes_prometheus_text_with_normalized_paths() {
     let _ = router
         .clone()
         .oneshot(get(&format!("/api/v1/users/{UNKNOWN_ID}")))
+        .await
+        .unwrap();
+
+    // An unmatched route must be counted too, under the bounded label.
+    let _ = router
+        .clone()
+        .oneshot(get("/definitely/not/a/route"))
         .await
         .unwrap();
 
@@ -325,4 +356,8 @@ async fn metrics_endpoint_exposes_prometheus_text_with_normalized_paths() {
     assert!(text.contains("http_requests_total"), "metrics: {text}");
     assert!(text.contains("users/{id}"), "metrics: {text}");
     assert!(!text.contains(UNKNOWN_ID), "metrics: {text}");
+
+    // Unmatched routes are counted, but never under the raw path.
+    assert!(text.contains("<unmatched>"), "metrics: {text}");
+    assert!(!text.contains("definitely/not/a/route"), "metrics: {text}");
 }

@@ -43,10 +43,13 @@ pub fn build_router(state: AppState, cors_origins: Vec<String>) -> Router {
         .route("/ready", get(handlers::health::ready))
         .nest("/api/v1", api_v1)
         .merge(swagger_ui)
-        .route_layer(axum::middleware::from_fn(metrics::track_http_metrics))
+        // The fallback is registered before the metrics layer so
+        // unmatched-route 404s are counted too, under the bounded
+        // `<unmatched>` path label.
+        .fallback(not_found)
+        .layer(axum::middleware::from_fn(metrics::track_http_metrics))
         .layer(build_cors(cors_origins))
         .layer(axum::middleware::from_fn(i18n::locale_middleware))
-        .fallback(not_found)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<Body>| {

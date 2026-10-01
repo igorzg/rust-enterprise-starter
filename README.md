@@ -132,6 +132,8 @@ See [Development](#development) and [Configuration](#configuration) for details.
     ├── common/mod.rs           # in-memory fakes with counters
     ├── user_service.rs         # service tests (business rules, cache-aside)
     ├── users_api.rs            # full-router API tests
+    ├── config.rs               # env parsing (CORS origin validation)
+    ├── error_logging.rs        # 5xx log chain + sanitized envelope
     ├── i18n.rs                 # locale resolution + localization tests
     └── integration.rs          # real PostgreSQL + Redis (skipped when env is unset)
 ```
@@ -156,7 +158,7 @@ All configuration comes from environment variables (see `.env.bak`). The app **f
 | `REDIS_URL`            | **yes**  | —           | Redis connection string                              |
 | `RUST_LOG`             | no       | `info`      | Log filter (`info`, `debug`, `warn`, per-target…)    |
 | `LOG_FORMAT`           | no       | `pretty`    | `pretty` or `json`                                   |
-| `CORS_ALLOWED_ORIGINS` | no       | *(empty)*   | Comma-separated origins; empty = CORS disabled, `*` = any |
+| `CORS_ALLOWED_ORIGINS` | no       | *(empty)*   | Comma-separated origins; empty = CORS disabled, `*` = any; invalid entries fail at startup |
 | `CACHE_TTL_SECS`       | no       | `300`       | Cache-aside TTL in seconds                           |
 | `POSTGRES_USER`        | no       | `app`       | Used by the Compose files                            |
 | `POSTGRES_PASSWORD`    | no       | `app`       | Used by the Compose files                            |
@@ -307,7 +309,9 @@ make test        # = cargo test
 The test suite is **hermetic**: it runs against in-memory fakes of `UserRepository`, `UserCache`, and `HealthCheck` (with hit/miss counters), so `cargo test` needs **no local PostgreSQL or Redis**.
 
 - `tests/user_service.rs` — business rules (uniqueness conflicts), cache-aside (first GET reads the DB exactly once and fills the cache; second GET is a cache hit), invalidation on delete.
-- `tests/users_api.rs` — the full Axum router: request validation (email format, blank names, case/whitespace normalization), health/ready, create/get/delete flows, error envelopes, non-UUID ids, unknown routes.
+- `tests/users_api.rs` — the full Axum router: request validation (email format, blank names, case/whitespace normalization), health/ready, create/get/delete flows, error envelopes (including sanitized 500s), non-UUID ids, unknown routes.
+- `tests/config.rs` — environment parsing: `CORS_ALLOWED_ORIGINS` accepts lists and `*`, rejects invalid entries at startup.
+- `tests/error_logging.rs` — a database failure logs the full error source chain (root cause included) while the HTTP envelope stays sanitized.
 - `tests/integration.rs` — the real PostgreSQL and Redis adapters: concurrent inserts of the same email (the `ON CONFLICT` race) and the create→read→delete round trip with a TTL check. **Skipped automatically** when `DATABASE_URL` / `REDIS_URL` are unset, so local `cargo test` stays hermetic; CI provides both services and applies the migrations first.
 
 ### Integration / migration validation (Docker)
@@ -353,7 +357,7 @@ The core (`services`) stays metrics-free — instrumentation lives only in the a
 | `cache_operation_duration_seconds`| histogram | `operation`                | Redis adapter               |
 | `cache_hits_total` / `cache_misses_total` | counter | —                   | Redis adapter               |
 
-The `path` label uses the **route template** (`/api/v1/users/{id}`), not the raw URL, so label cardinality stays bounded as ids change. The `/metrics` scrape itself is excluded from the HTTP counters.
+The `path` label uses the **route template** (`/api/v1/users/{id}`), not the raw URL, so label cardinality stays bounded as ids change. The `/metrics` scrape itself is excluded from the HTTP counters. Requests matching no route (the JSON 404 fallback) are counted under the bounded label `path="<unmatched>"` — never the raw path, so error probes cannot inflate cardinality.
 
 ### Using metrics in code
 
