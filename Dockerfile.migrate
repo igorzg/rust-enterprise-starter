@@ -1,0 +1,27 @@
+# Dedicated one-shot migration image.
+#
+# Installs the exact sqlx-cli version this project uses (keep in sync with
+# the `sqlx` crate version in Cargo.toml) with only the Postgres backend and
+# the same tokio + rustls runtime as the application, then runs the pending
+# migrations. Used by the `migrate` compose service:
+#
+#   docker compose run --rm migrate
+
+FROM rust:1.96-slim AS builder
+RUN cargo install sqlx-cli \
+    --version 0.8.6 \
+    --no-default-features \
+    --features rustls,postgres
+
+# trixie-slim (not bookworm): the rust:1.96-slim builder is trixie-based,
+# so the sqlx binary needs a glibc at least as new as trixie's.
+FROM debian:trixie-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 migrate
+
+USER migrate
+COPY --from=builder /usr/local/cargo/bin/sqlx /usr/local/bin/sqlx
+
+ENTRYPOINT ["sqlx", "migrate", "run"]
