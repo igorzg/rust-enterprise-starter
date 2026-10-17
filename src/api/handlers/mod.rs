@@ -1,3 +1,4 @@
-pub mod group_handler;
+//! App-level (version-independent) handlers: the health and readiness
+//! probes. Versioned handlers live in [`crate::api::v1::handlers`].
+
 pub mod health;
-pub mod user_handler;

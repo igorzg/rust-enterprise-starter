@@ -2,7 +2,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::api::dto::responses::UserResponse;
+use crate::api::v1::dto::responses::UserResponse;
 use crate::services::domain::{Group, User};
 
 /// Group representation returned by the API (list / create).

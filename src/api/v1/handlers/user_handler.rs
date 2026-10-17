@@ -4,8 +4,8 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use uuid::Uuid;
 
-use crate::api::dto::{CreateUserRequest, UserResponse};
 use crate::api::error::{ApiError, ErrorResponse};
+use crate::api::v1::dto::{CreateUserRequest, UserResponse};
 use crate::state::AppState;
 
 /// Create a user.

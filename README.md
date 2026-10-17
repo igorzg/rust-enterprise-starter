@@ -15,6 +15,7 @@ PostgreSQL persistence, Redis cache-aside, OpenAPI/Swagger documentation, Docker
 - [Docker Deployment](#docker-deployment)
 - [Migrations](#migrations)
 - [API](#api)
+- [API Versioning](#api-versioning)
 - [Swagger / OpenAPI](#swagger--openapi)
 - [Testing](#testing)
 - [Logging](#logging)
@@ -130,15 +131,21 @@ See [Development](#development) and [Configuration](#configuration) for details.
 │   │   │   └── redis/          # RedisUserCache + RedisGroupCache
 │   │   └── health.rs           # SystemHealthCheck (PG + Redis probes)
 │   └── api/
-│       ├── routes.rs           # router, CORS, limits, compression, metrics, 404
+│       ├── routes.rs           # app router: probes, OpenAPI, CORS, tracing, 404
 │       ├── error.rs            # ApiError → HTTP status + localized JSON envelope
 │       ├── i18n.rs             # Accept-Language locale resolution
 │       ├── metrics.rs          # Prometheus recorder, /metrics, RED middleware
-│       ├── openapi.rs          # ApiDoc (utoipa)
-│       ├── dto/                # request/response types (requests/ + responses/)
-│       └── handlers/           # user_handler, group_handler, health
+│       ├── openapi.rs          # ApiDoc (utoipa), info.version = API contract
+│       ├── version.rs          # API version constants (single source of truth)
+│       ├── v1/                 # API version 1
+│       │   ├── routes.rs       # v1 route table, body limit, gzip, X-API-Version
+│       │   ├── dto/            # v1 request/response types (requests/ + responses/)
+│       │   └── handlers/       # user_handler, group_handler
+│       └── handlers/
+│           └── health.rs       # /health + /ready (version-independent)
 └── tests/
     ├── common/mod.rs           # in-memory fakes with counters
+    ├── api_versioning.rs       # versioning contract (header + OpenAPI sync)
     ├── user_service.rs         # service tests (business rules, cache-aside)
     ├── group_service.rs        # group service tests (membership, cache-aside)
     ├── users_api.rs            # full-router API tests
@@ -280,6 +287,8 @@ Base path: `/api/v1`
 | `POST`   | `/api/v1/groups/{id}/users`   | Assign a user to a group (idempotent)          | 204     | 400, 404, 500   |
 | `DELETE` | `/api/v1/groups/{id}/users/{userId}` | Remove a user from a group            | 204     | 400, 404, 500   |
 
+Every v1 response — success or error — carries the `X-API-Version: v1` header (see [API Versioning](#api-versioning)).
+
 ### Examples
 
 ```bash
@@ -311,12 +320,29 @@ All errors share the same JSON shape. `5xx` responses never leak internal detail
 
 Codes: `VALIDATION_ERROR` (400), `NOT_FOUND` (404), `CONFLICT` (409, duplicate email or group name), `DATABASE_ERROR` / `CACHE_ERROR` (500).
 
+## API Versioning
+
+The API is versioned in the URL. Versioned endpoints live under `/api/v1`; version-independent surfaces (`/health`, `/ready`, `/metrics`, OpenAPI, the JSON 404 fallback) stay at the root.
+
+- **Single source of truth** — `src/api/version.rs` defines `API_VERSION` (`v1`), `API_BASE` (`/api/v1`), `API_VERSION_HEADER`, and `API_CONTRACT_VERSION` (`1.0.0`). The router, the version header, and the OpenAPI document all read from it.
+- **`X-API-Version` header** — every v1 response, success or error, carries `X-API-Version: v1` (canonical wire form `x-api-version`; header names are case-insensitive). App-level surfaces never carry it, so its presence also signals that the response came from a versioned endpoint.
+- **Contract version ≠ crate version** — the OpenAPI `info.version` reports the API contract semver (`1.0.0`), independent of the crate version in `Cargo.toml`.
+- **Drift guard** — utoipa attributes take string literals only, so the version is written twice in code (the constants, and the OpenAPI/path attributes). `tests/api_versioning.rs` asserts the two agree; a drift fails the test run.
+
+### Adding a v2
+
+1. Add a sibling `src/api/v2/` module with its own handlers and DTOs (v1 keeps working untouched while v2 is developed).
+2. Register it next to v1 in `build_router`: `.nest("/api/v2", v2::v2_router())`.
+3. Deprecate v1 by adding `Deprecation: true` and `Sunset` headers (RFC 8594) to the v1 scope, then remove it once clients have migrated.
+
 ## Swagger / OpenAPI
 
 - **Swagger UI:** `http://localhost:8080/swagger-ui`
 - **OpenAPI JSON:** `http://localhost:8080/openapi.json`
 
 Both are generated from the code via utoipa (sourced from the handler attributes), so they stay in sync with the API.
+
+`info.version` is the **API contract** semver (`version::API_CONTRACT_VERSION`), not the crate version — `tests/api_versioning.rs` keeps the literal in the utoipa attributes in sync with the constant.
 
 ## Testing
 
@@ -330,6 +356,7 @@ The test suite is **hermetic**: it runs against in-memory fakes of `UserReposito
 - `tests/group_service.rs` — group business rules: name-uniqueness conflicts, cache-aside, invalidation on delete, membership add/remove (existence checks, idempotent assignment, 404 on removing a non-membership).
 - `tests/users_api.rs` — the full Axum router: request validation (email format, blank names, case/whitespace normalization), health/ready, create/get/delete flows, error envelopes (including sanitized 500s), non-UUID ids, unknown routes.
 - `tests/groups_api.rs` — the full Axum router for the seven group endpoints: name validation (blank/overlong), duplicate-name 409, group detail with members, idempotent assignment, 404s for unknown group/user/membership, per-user group listing, sanitized 500s.
+- `tests/api_versioning.rs` — the versioning contract: every v1 response (success and error) carries `X-API-Version: v1`; app-level surfaces and unknown paths (including `/api/v2/*`) do not; the OpenAPI `info.version` and path prefixes stay in sync with `api::version`.
 - `tests/config.rs` — environment parsing: `CORS_ALLOWED_ORIGINS` accepts lists and `*`, rejects invalid entries at startup.
 - `tests/error_logging.rs` — a database failure logs the full error source chain (root cause included) while the HTTP envelope stays sanitized.
 - `tests/integration.rs` — the real PostgreSQL and Redis adapters: concurrent inserts of the same email (the `ON CONFLICT` race) and the create→read→delete round trip with a TTL check. **Skipped automatically** when `DATABASE_URL` / `REDIS_URL` are unset, so local `cargo test` stays hermetic; CI provides both services and applies the migrations first.

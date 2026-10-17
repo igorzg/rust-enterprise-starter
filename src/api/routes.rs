@@ -1,10 +1,8 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, header::HeaderValue};
-use axum::routing::{delete, get, post};
-use tower_http::compression::CompressionLayer;
+use axum::routing::get;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{DefaultOnRequest, TraceLayer};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -14,45 +12,14 @@ use crate::api::handlers;
 use crate::api::i18n;
 use crate::api::metrics;
 use crate::api::openapi::ApiDoc;
+use crate::api::v1;
+use crate::api::version;
 use crate::state::AppState;
 
-/// Maximum accepted request body size (1 MiB).
-const MAX_BODY_BYTES: usize = 1024 * 1024;
-
-/// Build the application router: health endpoints, the `/api/v1` user
-/// API, OpenAPI + Swagger UI, CORS, body limits, gzip, tracing, and a
-/// JSON 404 fallback.
+/// Build the application router: version-independent surface (health
+/// probes, metrics, OpenAPI + Swagger UI), the versioned APIs nested
+/// under their base paths, CORS, tracing, and a JSON 404 fallback.
 pub fn build_router(state: AppState, cors_origins: Vec<String>) -> Router {
-    let api_v1 = Router::new()
-        .route("/users", post(handlers::user_handler::create_user))
-        .route(
-            "/users/{id}",
-            get(handlers::user_handler::get_user).delete(handlers::user_handler::delete_user),
-        )
-        .route(
-            "/users/{id}/groups",
-            get(handlers::group_handler::user_groups),
-        )
-        .route(
-            "/groups",
-            get(handlers::group_handler::list_groups).post(handlers::group_handler::create_group),
-        )
-        .route(
-            "/groups/{id}",
-            get(handlers::group_handler::get_group).delete(handlers::group_handler::delete_group),
-        )
-        .route(
-            "/groups/{id}/users",
-            post(handlers::group_handler::add_group_member),
-        )
-        .route(
-            "/groups/{id}/users/{userId}",
-            delete(handlers::group_handler::remove_group_member),
-        )
-        .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
-        .layer(CompressionLayer::new())
-        .with_state(state.clone());
-
     // The Swagger UI crate serves the OpenAPI document at the `.url` path
     // and the interactive UI under the `.new` path.
     let swagger_ui = SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi());
@@ -61,7 +28,7 @@ pub fn build_router(state: AppState, cors_origins: Vec<String>) -> Router {
         .route("/metrics", get(metrics::metrics_handler))
         .route("/health", get(handlers::health::health))
         .route("/ready", get(handlers::health::ready))
-        .nest("/api/v1", api_v1)
+        .nest(version::API_BASE, v1::v1_router())
         .merge(swagger_ui)
         // The fallback is registered before the metrics layer so
         // unmatched-route 404s are counted too, under the bounded
