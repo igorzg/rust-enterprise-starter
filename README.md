@@ -137,6 +137,7 @@ See [Development](#development) and [Configuration](#configuration) for details.
 │       ├── metrics.rs          # Prometheus recorder, /metrics, RED middleware
 │       ├── openapi.rs          # ApiDoc (utoipa), info.version = API contract
 │       ├── version.rs          # API version constants (single source of truth)
+│       ├── validations.rs      # request field validation (format, length, normalization)
 │       ├── v1/                 # API version 1
 │       │   ├── routes.rs       # v1 route table, body limit, gzip, X-API-Version
 │       │   ├── dto/            # v1 request/response types (requests/ + responses/)
@@ -150,6 +151,7 @@ See [Development](#development) and [Configuration](#configuration) for details.
     ├── group_service.rs        # group service tests (membership, cache-aside)
     ├── users_api.rs            # full-router API tests
     ├── groups_api.rs           # full-router API tests for the group endpoints
+    ├── validations.rs          # direct tests for api::validations
     ├── config.rs               # env parsing (CORS origin validation)
     ├── error_logging.rs        # 5xx log chain + sanitized envelope
     ├── i18n.rs                 # locale resolution + localization tests
@@ -356,6 +358,7 @@ The test suite is **hermetic**: it runs against in-memory fakes of `UserReposito
 - `tests/group_service.rs` — group business rules: name-uniqueness conflicts, cache-aside, invalidation on delete, membership add/remove (existence checks, idempotent assignment, 404 on removing a non-membership).
 - `tests/users_api.rs` — the full Axum router: request validation (email format, blank names, case/whitespace normalization), health/ready, create/get/delete flows, error envelopes (including sanitized 500s), non-UUID ids, unknown routes.
 - `tests/groups_api.rs` — the full Axum router for the seven group endpoints: name validation (blank/overlong), duplicate-name 409, group detail with members, idempotent assignment, 404s for unknown group/user/membership, per-user group listing, sanitized 500s.
+- `tests/validations.rs` — direct tests for the `api::validations` field rules (blank/overlong names, email format and length limits, trim + lowercase normalization).
 - `tests/api_versioning.rs` — the versioning contract: every v1 response (success and error) carries `X-API-Version: v1`; app-level surfaces and unknown paths (including `/api/v2/*`) do not; the OpenAPI `info.version` and path prefixes stay in sync with `api::version`.
 - `tests/config.rs` — environment parsing: `CORS_ALLOWED_ORIGINS` accepts lists and `*`, rejects invalid entries at startup.
 - `tests/error_logging.rs` — a database failure logs the full error source chain (root cause included) while the HTTP envelope stays sanitized.
@@ -574,7 +577,7 @@ Key rules:
 - **The ports are owned by the core.** `UserRepository`, `UserCache`, `GroupRepository`, `GroupCache`, and `HealthCheck` are defined in `services/ports/` (grouped by domain: `user`, `group`, `health`) in the core's vocabulary (the domain model, the core error types); the persistence adapters implement them and map entity ↔ domain internally.
 - **Handlers contain no SQL and no business logic.** They decode requests, call a service, and encode responses.
 - **Services never know the cache is Redis or the DB is PostgreSQL.** They only see the `UserCache`, `UserRepository`, `GroupCache`, and `GroupRepository` traits. Redis/SQLx types never leave `persistence/`.
-- **Request validation lives in the API layer.** Format, length, and normalization checks run when a request is mapped to its command (`CreateUserRequest::to_command`); services apply business rules only (e.g. email uniqueness).
+- **Request validation lives in the API layer.** Format, length, and normalization checks live in `api/validations.rs` and run when a request is mapped to its command (each `XxxRequest::to_command`); services apply business rules only (e.g. email uniqueness).
 - **No DI container.** Dependencies are explicit: `Arc<dyn Trait>` fields constructed once in the composition root (`src/state.rs`) and shared via Axum `State`.
 - **Entity purity.** `persistence/database/domain/` and `persistence/cache/domain/` have no Axum, SQLx, Redis, or HTTP imports.
 
@@ -588,7 +591,7 @@ Errors are split along the same boundary as models:
 | `services/` | `AppError` (core error model)  | `Validation`, `NotFound`, `Conflict`, `Database`, `Cache`    |
 
 - **Handlers return `Result<_, ApiError>`.** Body/path rejections map to `InvalidBody` / `InvalidId`; core `AppError` is wrapped as `ApiError::App` via `#[from]`.
-- **Request validation lives in the API layer** (`CreateUserRequest::to_command`) but raises the core `AppError::Validation(ValidationError)`: the *check* sits at the edge, the *error type* is core-owned (`services/errors.rs`) and carries locale-agnostic data only.
+- **Request validation lives in the API layer** — the checks are in `api/validations.rs`, called from each `XxxRequest::to_command` — but raise the core `AppError::Validation(ValidationError)`: the *check* sits at the edge, the *error type* is core-owned (`services/errors.rs`) and carries locale-agnostic data only.
 - **HTTP mapping is API-only.** `AppError::status_code()`, `code()`, and `localized_message()` live in `api/error.rs`; the core never references HTTP status codes or locales.
 
 ### Request flow (cache-aside)

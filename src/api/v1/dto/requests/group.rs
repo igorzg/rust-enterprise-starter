@@ -2,10 +2,9 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::api::validations;
 use crate::services::domain::CreateGroupCommand;
-use crate::services::errors::{AppError, ValidationError};
-
-const MAX_GROUP_NAME_LEN: usize = 120;
+use crate::services::errors::AppError;
 
 /// Request body for creating a group.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -16,17 +15,12 @@ pub struct CreateGroupRequest {
 
 impl CreateGroupRequest {
     /// Validate the request and map it to the application-layer command.
-    /// Request validation (whitespace, length) lives in the API layer;
-    /// services apply business rules only (name uniqueness).
+    /// Request validation (whitespace, length) lives in
+    /// [`crate::api::validations`]; services apply business rules only
+    /// (name uniqueness).
     pub fn to_command(&self) -> Result<CreateGroupCommand, AppError> {
-        let name = self.name.trim();
-        if name.is_empty() || name.len() > MAX_GROUP_NAME_LEN {
-            return Err(AppError::Validation(ValidationError::GroupNameLength {
-                max: MAX_GROUP_NAME_LEN,
-            }));
-        }
         Ok(CreateGroupCommand {
-            name: name.to_string(),
+            name: validations::validate_group_name(&self.name)?,
         })
     }
 }

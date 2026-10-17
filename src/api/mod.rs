@@ -16,4 +16,5 @@ pub mod metrics;
 pub mod openapi;
 pub mod routes;
 pub mod v1;
+pub mod validations;
 pub mod version;
